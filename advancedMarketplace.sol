@@ -13,12 +13,15 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 
 ////////////interface of lazy nft///////////////////
 interface lazyNft {
-    function ownerOfToken(uint256 tokenId) external view returns(address);
+    function ownerOfToken(uint256 tokenId) external view returns (address);
 
-    function hasRole(bytes32 role, address account) external view returns (bool);
+    function hasRole(bytes32 role, address account)
+        external
+        view
+        returns (bool);
 }
-////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////
 
 interface ISimpleMarketplaceNativeERC721 {
     event NewListing(
@@ -128,14 +131,20 @@ contract advancedMarketplace is
         uint256 endTime;
     }
 
+    address founouniAddress = 0x7cb0167a57E98b07ec3bf293291fd4665D86B058;
+
     //////////////////multiple contracts//////////////////
     mapping(address => mapping(uint256 => Listing)) public contractListing;
     mapping(address => mapping(uint256 => Bidding)) public contractBids;
     mapping(address => mapping(uint256 => bool)) public contractTokensListing;
     mapping(address => mapping(uint256 => bool)) public contractTokensBidding;
+    mapping(address => uint256) public biddingRedeemableFunds;
 
     mapping(address => mapping(uint256 => Auction)) public contractAuction;
     mapping(address => mapping(uint256 => bool)) public contractTokensAuction;
+    mapping(address => uint256) public auctionRedeemableFunds;
+
+    mapping(address => mapping(uint256 => address)) public stakedNftOwner;
 
     mapping(address => uint256) public artistFee;
     /////////////////////////////////////////////////////////////
@@ -266,23 +275,41 @@ contract advancedMarketplace is
             "Marketplace: bidder is the token owner"
         );
         Bidding memory _bid = Bidding(msg.sender, tokenId, offer);
-        if (contractTokensBidding[nftAddress][tokenId]) {
-            require(
-                contractBids[nftAddress][tokenId].offer < _bid.offer,
-                "Marketplace: a higher bid already exists for this token"
-            );
-            bool sent = payable(contractBids[nftAddress][tokenId].buyer).send(
-                contractBids[nftAddress][tokenId].offer
+        if (
+            contractTokensBidding[nftAddress][tokenId] &&
+            contractBids[nftAddress][tokenId].offer < _bid.offer
+        ) {
+            // require(
+            //     contractBids[nftAddress][tokenId].offer < _bid.offer,
+            //     "Marketplace: a higher bid already exists for this token"
+            // );
+            // bool sent = payable(contractBids[nftAddress][tokenId].buyer).send(
+            //     contractBids[nftAddress][tokenId].offer
+            // ); //need to return last bidders funds so they dont get stuck in the contract
+            // require(
+            //     sent,
+            //     "Marketplace: failed to send previous bidder their funds"
+            // );
+            biddingRedeemableFunds[
+                contractBids[nftAddress][tokenId].buyer
+            ] += contractBids[nftAddress][tokenId].offer;
+        }
+
+        contractBids[nftAddress][tokenId] = _bid;
+        contractTokensBidding[nftAddress][tokenId] = true;
+        emit madeOffer(msg.sender, nftAddress, tokenId, msg.value);
+    }
+
+    function withdrawOfferFunds() external payable whenNotPaused {
+        if (biddingRedeemableFunds[msg.sender] > 0) {
+            bool sent = payable(msg.sender).send(
+                biddingRedeemableFunds[msg.sender]
             ); //need to return last bidders funds so they dont get stuck in the contract
             require(
                 sent,
                 "Marketplace: failed to send previous bidder their funds"
             );
         }
-
-        contractBids[nftAddress][tokenId] = _bid;
-        contractTokensBidding[nftAddress][tokenId] = true;
-        emit madeOffer(msg.sender, nftAddress, tokenId, msg.value);
     }
 
     function acceptOffer(address nftAddress, uint256 tokenId)
@@ -305,7 +332,7 @@ contract advancedMarketplace is
         // bool sent = payable(msg.sender).send(amount);
         // require(sent, "funds failed to send");
 
-        SendFunds(msg.sender, amount, tokenId);
+        SendFunds(msg.sender, amount, tokenId, nftAddress);
 
         IERC721 token = getToken(nftAddress);
         token.safeTransferFrom(
@@ -411,7 +438,7 @@ contract advancedMarketplace is
         token.safeTransferFrom(_list.seller, msg.sender, tokenId, "");
         // payable(_list.seller).transfer(msg.value);
 
-        SendFunds(_list.seller, msg.value, tokenId);
+        SendFunds(_list.seller, msg.value, tokenId, nftAddress);
 
         _list.isSold = true;
 
@@ -458,6 +485,12 @@ contract advancedMarketplace is
         );
         contractTokensAuction[nftAddress][tokenId] = true;
         contractAuction[nftAddress][tokenId] = newAuction;
+
+        IERC721 token = getToken(nftAddress);
+        stakedNftOwner[nftAddress][tokenId] = msg.sender;
+
+        token.safeTransferFrom(msg.sender, address(this), tokenId, "");
+
         emit auctionStart(
             msg.sender,
             nftAddress,
@@ -498,17 +531,9 @@ contract advancedMarketplace is
         );
 
         uint256 amount = contractAuction[nftAddress][tokenId].highestBid;
-
-        if (amount != 0) {
-            bool sent = payable(
-                contractAuction[nftAddress][tokenId].highestBidder
-            ).send(amount); //need to return last bidders funds so they dont get stuck in the contract
-            require(
-                sent,
-                "Marketplace: failed to send previous bidder their funds"
-            );
-        }
-
+        auctionRedeemableFunds[
+            contractAuction[nftAddress][tokenId].highestBidder
+        ] += amount;
         contractAuction[nftAddress][tokenId].highestBidder = msg.sender;
         contractAuction[nftAddress][tokenId].highestBid = bid;
 
@@ -536,16 +561,32 @@ contract advancedMarketplace is
         if (auction.highestBidder != address(0)) {
             // bool sent = payable(auction.auctioner).send(auction.highestBid);                                     //need to return last bidders funds so they dont get stuck in the contract
             // require(sent, "Marketplace: failed to send auctioner their funds");
-            SendFunds(auction.auctioner, auction.highestBid, tokenId);
+            SendFunds(
+                auction.auctioner,
+                auction.highestBid,
+                tokenId,
+                nftAddress
+            );
         }
 
         IERC721 token = getToken(nftAddress);
-        token.safeTransferFrom(
-            auction.auctioner,
-            auction.highestBidder,
-            tokenId,
-            ""
-        );
+        if (auction.highestBidder != address(0)) {
+            token.safeTransferFrom(
+                address(this),
+                auction.highestBidder,
+                tokenId,
+                ""
+            );
+        } else {
+            token.safeTransferFrom(
+                address(this),
+                stakedNftOwner[nftAddress][tokenId],
+                tokenId,
+                ""
+            );
+        }
+
+        delete stakedNftOwner[nftAddress][tokenId];
 
         emit auctionEnd(
             auction.auctioner,
@@ -575,16 +616,34 @@ contract advancedMarketplace is
         delete contractTokensAuction[nftAddress][tokenId];
     }
 
+    function withdrawBiddingFunds() external payable whenNotPaused {
+        if (auctionRedeemableFunds[msg.sender] != 0) {
+            bool sent = payable(msg.sender).send(
+                auctionRedeemableFunds[msg.sender]
+            ); //need to return last bidders funds so they dont get stuck in the contract
+            require(
+                sent,
+                "Marketplace: failed to send previous bidder their funds"
+            );
+        }
+    }
+
     ///////////////////////////////////////////////////////////////////////////////////////
 
     ///////////////////////////////royalties functions ///////////////////////////////////
 
-    function setLazyAddress (address _lazyAddress) external onlyOwner {
+    function setLazyAddress(address _lazyAddress) external onlyOwner {
         lazyAddress = _lazyAddress;
     }
 
     function setArtistFee(address _lazyAddress, uint256 percentage) external {
-        require(lazyNft(_lazyAddress).hasRole(0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6, msg.sender), "Marketplace: can't set fee if you are not an artist.");
+        require(
+            lazyNft(_lazyAddress).hasRole(
+                0x9f2df0fed2c77648de5860a4cc508cd0818c85b8b8a1ab4ceeef8d981c8956a6,
+                msg.sender
+            ),
+            "Marketplace: can't set fee if you are not an artist."
+        );
         require(percentage <= 10, "Marketplace: set percentage exceeds limit.");
         artistFee[msg.sender] = percentage;
     }
@@ -609,17 +668,49 @@ contract advancedMarketplace is
         delete contractTokensListing[nftAddress][tokenId];
     }
 
-    function SendFunds(address recipient, uint256 amount, uint256 tokenId) internal {
-        (bool hs, ) = payable(adminWallet).call{value: (amount * 5) / 100}("");
+    function SendFunds(
+        address recipient,
+        uint256 amount,
+        uint256 tokenId,
+        address nftAddress
+    ) internal {
+        uint256 adminRoyalty = (amount * 5) / 100;
+        (bool hs, ) = payable(adminWallet).call{value: adminRoyalty}("");
         require(hs, "Marketplace: admin wallet failed to recieve their funds");
 
-        address artistAddress = lazyNft(lazyAddress).ownerOfToken(tokenId);
-        require(artistAddress != address(0), "Marketplace: token has not been redeemed yet");
+        if (nftAddress == founouniAddress) {
+            address artistAddress = lazyNft(lazyAddress).ownerOfToken(tokenId);
+            require(
+                artistAddress != address(0),
+                "Marketplace: token has not been redeemed yet"
+            );
 
-        (bool artistSent, ) = payable(artistAddress).call{value: (amount * artistFee[artistAddress]) / 100}("");
-        require(artistSent, "Marketplace: artist failed to recieve their funds");
+            uint256 artistRoyalty = (amount * artistFee[artistAddress]) / 100;
+            (bool artistSent, ) = payable(artistAddress).call{
+                value: artistRoyalty
+            }("");
+            require(
+                artistSent,
+                "Marketplace: artist failed to recieve their funds"
+            );
 
-        (bool sent, ) = payable(recipient).call{value: (amount * 95 - artistFee[artistAddress]) / 100}("");
-        require(sent, "Marketplace: recipient failed to recieve their funds");
+            uint256 recipientFunds = amount - (artistRoyalty + adminRoyalty);
+            (bool sent, ) = payable(recipient).call{
+                value: recipientFunds / 100
+            }("");
+            require(
+                sent,
+                "Marketplace: recipient failed to recieve their funds"
+            );
+        } else {
+            uint256 recipientFunds = amount - (adminRoyalty);
+            (bool sent, ) = payable(recipient).call{
+                value: recipientFunds / 100
+            }("");
+            require(
+                sent,
+                "Marketplace: recipient failed to recieve their funds"
+            );
+        }
     }
 }
