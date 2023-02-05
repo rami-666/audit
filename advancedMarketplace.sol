@@ -97,7 +97,7 @@ interface ISimpleMarketplaceNativeERC721 {
     function buy(address nftAddress, uint256 tokenId) external payable;
 }
 
-contract advancedMarketplace is
+contract auditedMarketplace is
     Ownable,
     ISimpleMarketplaceNativeERC721,
     ReentrancyGuard,
@@ -274,6 +274,10 @@ contract advancedMarketplace is
             token.ownerOf(tokenId) != msg.sender,
             "Marketplace: bidder is the token owner"
         );
+        require(
+            offer > contractBids[nftAddress][tokenId].offer,
+            "Marketplace: a higher bid already exists for this token"
+        );
         Bidding memory _bid = Bidding(msg.sender, tokenId, offer);
         if (
             contractTokensBidding[nftAddress][tokenId] &&
@@ -302,6 +306,7 @@ contract advancedMarketplace is
 
     function withdrawOfferFunds() external payable whenNotPaused {
         if (biddingRedeemableFunds[msg.sender] > 0) {
+            delete biddingRedeemableFunds[msg.sender];
             bool sent = payable(msg.sender).send(
                 biddingRedeemableFunds[msg.sender]
             ); //need to return last bidders funds so they dont get stuck in the contract
@@ -314,23 +319,16 @@ contract advancedMarketplace is
 
     function acceptOffer(address nftAddress, uint256 tokenId)
         external
-        payable
         nonReentrant
         onlyItemOwner(tokenId, nftAddress)
         onlyTransferApproval(msg.sender, nftAddress)
         whenNotPaused
     {
         require(
-            msg.value == 0,
-            "Marketplace: sent value should be 0 to avoid funds getting stuck."
-        );
-        require(
             contractTokensBidding[nftAddress][tokenId] == true,
             "Marketplace: the token has no active offers"
         );
         uint256 amount = contractBids[nftAddress][tokenId].offer;
-        // bool sent = payable(msg.sender).send(amount);
-        // require(sent, "funds failed to send");
 
         SendFunds(msg.sender, amount, tokenId, nftAddress);
 
@@ -357,14 +355,9 @@ contract advancedMarketplace is
 
     function deleteOffer(address nftAddress, uint256 tokenId)
         external
-        payable
         nonReentrant
         whenNotPaused
     {
-        require(
-            msg.value == 0,
-            "Marketplace: sent value should be 0 to avoid funds getting stuck."
-        );
         require(
             contractBids[nftAddress][tokenId].buyer == msg.sender,
             "Marketplace: cannot delete a bid that is not yours"
@@ -381,14 +374,9 @@ contract advancedMarketplace is
 
     function declineOffer(address nftAddress, uint256 tokenId)
         external
-        payable
         nonReentrant
         whenNotPaused
     {
-        require(
-            msg.value == 0,
-            "Marketplace: sent value should be 0 to avoid funds getting stuck."
-        );
         IERC721 token = getToken(nftAddress);
         require(
             token.ownerOf(tokenId) == msg.sender,
@@ -474,7 +462,7 @@ contract advancedMarketplace is
             !contractTokensAuction[nftAddress][tokenId],
             "Marketplace: Should end previous auction before starting a new one."
         );
-        require(minimumBid >= 0, "Marketplace: minimum bid is invalid");
+        // require(minimumBid >= 0, "Marketplace: minimum bid is invalid");
 
         Auction memory newAuction = Auction(
             msg.sender,
@@ -558,19 +546,16 @@ contract advancedMarketplace is
             block.timestamp > auction.endTime,
             "Marketplace: cannot end an auction before time expires"
         );
+
+        IERC721 token = getToken(nftAddress);
         if (auction.highestBidder != address(0)) {
-            // bool sent = payable(auction.auctioner).send(auction.highestBid);                                     //need to return last bidders funds so they dont get stuck in the contract
-            // require(sent, "Marketplace: failed to send auctioner their funds");
             SendFunds(
                 auction.auctioner,
                 auction.highestBid,
                 tokenId,
                 nftAddress
             );
-        }
 
-        IERC721 token = getToken(nftAddress);
-        if (auction.highestBidder != address(0)) {
             token.safeTransferFrom(
                 address(this),
                 auction.highestBidder,
@@ -618,6 +603,7 @@ contract advancedMarketplace is
 
     function withdrawBiddingFunds() external payable whenNotPaused {
         if (auctionRedeemableFunds[msg.sender] != 0) {
+            delete auctionRedeemableFunds[msg.sender];
             bool sent = payable(msg.sender).send(
                 auctionRedeemableFunds[msg.sender]
             ); //need to return last bidders funds so they dont get stuck in the contract
@@ -695,22 +681,22 @@ contract advancedMarketplace is
             );
 
             uint256 recipientFunds = amount - (artistRoyalty + adminRoyalty);
-            (bool sent, ) = payable(recipient).call{
-                value: recipientFunds / 100
-            }("");
+            (bool sent, ) = payable(recipient).call{value: recipientFunds}("");
             require(
                 sent,
                 "Marketplace: recipient failed to recieve their funds"
             );
         } else {
             uint256 recipientFunds = amount - (adminRoyalty);
-            (bool sent, ) = payable(recipient).call{
-                value: recipientFunds / 100
-            }("");
+            (bool sent, ) = payable(recipient).call{value: recipientFunds}("");
             require(
                 sent,
                 "Marketplace: recipient failed to recieve their funds"
             );
         }
+    }
+
+    function setFonooniAddress(address _founouniAddress) external onlyOwner {
+        founouniAddress = _founouniAddress;
     }
 }
