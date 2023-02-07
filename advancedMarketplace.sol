@@ -304,19 +304,31 @@ contract auditedMarketplace is
         emit madeOffer(msg.sender, nftAddress, tokenId, msg.value);
     }
 
-    function withdrawOfferFunds() external payable whenNotPaused {
-        if (biddingRedeemableFunds[msg.sender] > 0) {
-            delete biddingRedeemableFunds[msg.sender];
-            bool sent = payable(msg.sender).send(
-                biddingRedeemableFunds[msg.sender]
-            ); //need to return last bidders funds so they dont get stuck in the contract
-            require(
-                sent,
-                "Marketplace: failed to send previous bidder their funds"
-            );
+    // function withdrawOfferFunds() external payable whenNotPaused {
+    //     if (biddingRedeemableFunds[msg.sender] > 0) {
+    //         delete biddingRedeemableFunds[msg.sender];
+    //         bool sent = payable(msg.sender).send(
+    //             biddingRedeemableFunds[msg.sender]
+    //         ); //need to return last bidders funds so they dont get stuck in the contract
+    //         require(
+    //             sent,
+    //             "Marketplace: failed to send previous bidder their funds"
+    //         );
+    //     }
+    // }
+        function withdrawOfferFunds() external whenNotPaused {
+            if (biddingRedeemableFunds[msg.sender] > 0) {
+                uint256 transferAmount = biddingRedeemableFunds[msg.sender];
+                delete biddingRedeemableFunds[msg.sender];
+                bool sent = payable(msg.sender).send(
+                    transferAmount
+                ); //need to return last bidders funds so they dont get stuck in the contract
+                require(
+                    sent,
+                    "Marketplace: failed to send previous bidder their funds"
+                );
+            }
         }
-    }
-
     function acceptOffer(address nftAddress, uint256 tokenId)
         external
         nonReentrant
@@ -601,11 +613,12 @@ contract auditedMarketplace is
         delete contractTokensAuction[nftAddress][tokenId];
     }
 
-    function withdrawBiddingFunds() external payable whenNotPaused {
+    function withdrawBiddingFunds() external whenNotPaused {
         if (auctionRedeemableFunds[msg.sender] != 0) {
+            uint256 biddingTransferAmount = auctionRedeemableFunds[msg.sender];
             delete auctionRedeemableFunds[msg.sender];
             bool sent = payable(msg.sender).send(
-                auctionRedeemableFunds[msg.sender]
+                biddingTransferAmount
             ); //need to return last bidders funds so they dont get stuck in the contract
             require(
                 sent,
